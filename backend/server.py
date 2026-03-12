@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import logging
 import json
 from pathlib import Path
@@ -24,6 +25,9 @@ db = client[os.environ['DB_NAME']]
 
 # OpenAI client
 openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+
+# Sentinel value used to detect a missing/placeholder OpenAI API key
+_PLACEHOLDER_API_KEY_PREFIX = 'sk-placeholder'
 
 # Configure logging
 logging.basicConfig(
@@ -84,6 +88,23 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class Task(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    mode: str  # e.g. "fullstack", "mobile", "landing"
+    prompt: str
+    status: str = "queued"  # queued / running / succeeded / failed
+    output: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class TaskCreate(BaseModel):
+    mode: str
+    prompt: str
+
+
 # --- Helper ---
 
 def datetime_to_iso(dt: datetime) -> str:
@@ -101,6 +122,13 @@ def doc_to_message(doc: dict) -> Message:
     if isinstance(doc.get('created_at'), str):
         doc['created_at'] = datetime.fromisoformat(doc['created_at'])
     return Message(**doc)
+
+
+def doc_to_task(doc: dict) -> Task:
+    for key in ('created_at', 'updated_at'):
+        if isinstance(doc.get(key), str):
+            doc[key] = datetime.fromisoformat(doc[key])
+    return Task(**doc)
 
 
 # --- Routes ---
@@ -256,6 +284,108 @@ async def chat(request: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@api_router.post("/tasks", response_model=Task)
+async def create_task(body: TaskCreate):
+    task = Task(mode=body.mode, prompt=body.prompt)
+    doc = task.model_dump()
+    doc['created_at'] = datetime_to_iso(doc['created_at'])
+    doc['updated_at'] = datetime_to_iso(doc['updated_at'])
+    await db.tasks.insert_one(doc)
+
+    # Fire-and-forget generation pipeline
+    asyncio.create_task(_run_task(task.id, body.mode, body.prompt))
+    return task
+
+
+async def _run_task(task_id: str, mode: str, prompt: str):
+    """Generate a structured plan/spec for the requested app using OpenAI."""
+    now_iso = datetime_to_iso(datetime.now(timezone.utc))
+    await db.tasks.update_one(
+        {"id": task_id},
+        {"$set": {"status": "running", "updated_at": now_iso}},
+    )
+
+    mode_labels = {
+        "fullstack": "Application Full Stack",
+        "mobile": "Application Mobile",
+        "landing": "Page d'atterrissage",
+    }
+    mode_label = mode_labels.get(mode, mode)
+
+    system_prompt = (
+        "You are an expert software architect. "
+        "Given a brief description of an application, produce a concise structured plan "
+        "in the following JSON format:\n"
+        "{\n"
+        '  "title": "<short app name>",\n'
+        '  "description": "<one-paragraph description>",\n'
+        '  "tech_stack": ["<tech1>", "<tech2>", ...],\n'
+        '  "features": ["<feature1>", "<feature2>", ...],\n'
+        '  "pages": ["<page1>", "<page2>", ...],\n'
+        '  "api_endpoints": ["<endpoint1>", "<endpoint2>", ...]\n'
+        "}\n"
+        "Respond only with the JSON object, no prose."
+    )
+    user_message = f"Type: {mode_label}\nDescription: {prompt}"
+
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if api_key and not api_key.startswith(_PLACEHOLDER_API_KEY_PREFIX):
+            response = await openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+            )
+            output = response.choices[0].message.content
+        else:
+            # Placeholder output when no valid API key is configured
+            output = json.dumps({
+                "title": prompt[:40],
+                "description": f"A {mode_label} application: {prompt}",
+                "tech_stack": ["React", "FastAPI", "MongoDB"],
+                "features": ["User authentication", "Dashboard", "REST API"],
+                "pages": ["Home", "Dashboard", "Settings"],
+                "api_endpoints": ["GET /api/items", "POST /api/items"],
+            }, ensure_ascii=False)
+
+        now_iso = datetime_to_iso(datetime.now(timezone.utc))
+        await db.tasks.update_one(
+            {"id": task_id},
+            {"$set": {"status": "succeeded", "output": output, "updated_at": now_iso}},
+        )
+    except Exception as exc:
+        logger.error("Task generation error for %s: %s", task_id, exc)
+        now_iso = datetime_to_iso(datetime.now(timezone.utc))
+        await db.tasks.update_one(
+            {"id": task_id},
+            {"$set": {"status": "failed", "output": str(exc), "updated_at": now_iso}},
+        )
+
+
+@api_router.get("/tasks", response_model=List[Task])
+async def list_tasks():
+    docs = await db.tasks.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return [doc_to_task(doc) for doc in docs]
+
+
+@api_router.get("/tasks/{task_id}", response_model=Task)
+async def get_task(task_id: str):
+    doc = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return doc_to_task(doc)
+
+
+@api_router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str):
+    result = await db.tasks.delete_one({"id": task_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"message": "Task deleted"}
 
 
 # Include the router

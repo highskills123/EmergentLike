@@ -1,14 +1,26 @@
 # EmergentLike
-application d'IA conversationnelle
 
-A full-stack conversational AI web application powered by **GPT-4o-mini**, **FastAPI**, **React**, and **MongoDB**.
+**Construis des apps avec l'IA, vite.** / Build apps with AI, fast.
+
+A premium bilingual (FR/EN) full-stack AI builder platform inspired by Emergent — powered by **GPT-4o-mini**, **FastAPI**, **React + Vite + Tailwind**, and **MongoDB**.
 
 ## Features
 
-- 💬 Real-time streaming chat with GPT-4o-mini
-- 📝 Persistent conversation history stored in MongoDB
-- 🗂️ Sidebar to browse, select, and delete conversations
-- ⚡ Modern React + Vite frontend with Tailwind CSS
+- 🏗️ **Builder Home** (`/`) — Emergent-style dark UI with mode tabs, prompt box, template chips, and a recent-tasks dashboard
+- 🤖 **AI Task Generation** — Submitting a prompt creates a task; OpenAI generates a structured plan/spec (title, description, tech stack, features, pages, API endpoints)
+- 💬 **Chat** (`/chat`) — Real-time streaming chat with GPT-4o-mini, with persistent conversation history
+- 📋 **Task Detail** (`/tasks/:id`) — View generated plan with live status polling
+- 🌐 **Bilingual** — French primary, English secondary throughout the UI
+
+---
+
+## Routes
+
+| Path | Description |
+|------|-------------|
+| `/` | Home / Builder (Emergent-style) |
+| `/chat` | Streaming chat UI |
+| `/tasks/:id` | Task detail / generated plan |
 
 ---
 
@@ -16,15 +28,19 @@ A full-stack conversational AI web application powered by **GPT-4o-mini**, **Fas
 
 ```
 EmergentLike/
-├── backend/          # FastAPI Python server
-│   ├── server.py     # Main API (chat, conversations, status)
+├── backend/
+│   ├── server.py          # FastAPI server (chat, conversations, tasks)
 │   ├── requirements.txt
 │   └── .env.example
-└── frontend/         # React + Vite + Tailwind CSS
+└── frontend/
     ├── src/
     │   ├── main.jsx
     │   ├── App.jsx
-    │   └── components/Chat.jsx
+    │   ├── components/
+    │   │   └── Chat.jsx   # Streaming chat component
+    │   └── pages/
+    │       ├── Home.jsx   # Builder home page
+    │       └── Task.jsx   # Task detail page
     ├── index.html
     ├── package.json
     └── .env.example
@@ -83,6 +99,8 @@ Then open [http://localhost:3000](http://localhost:3000).
 
 ## API Endpoints
 
+### Chat & Conversations
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/` | Health check |
@@ -91,5 +109,27 @@ Then open [http://localhost:3000](http://localhost:3000).
 | `DELETE` | `/api/conversations/:id` | Delete conversation |
 | `GET` | `/api/conversations/:id/messages` | List messages |
 | `POST` | `/api/chat` | Send message (SSE streaming) |
-| `POST` | `/api/status` | Create status check |
-| `GET` | `/api/status` | List status checks |
+
+### Builder Tasks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/tasks` | Create a builder task `{ mode, prompt }` |
+| `GET` | `/api/tasks` | List tasks (most recent first) |
+| `GET` | `/api/tasks/:id` | Get task (with generated output) |
+| `DELETE` | `/api/tasks/:id` | Delete task |
+
+#### Task object
+
+```json
+{
+  "id": "uuid",
+  "mode": "fullstack | mobile | landing",
+  "prompt": "Construis-moi une app SaaS pour…",
+  "status": "queued | running | succeeded | failed",
+  "output": "<JSON plan or null>",
+  "created_at": "ISO datetime",
+  "updated_at": "ISO datetime"
+}
+```
+
