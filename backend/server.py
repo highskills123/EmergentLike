@@ -23,11 +23,16 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# OpenAI client
-openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
-
 # Sentinel value used to detect a missing/placeholder OpenAI API key
 _PLACEHOLDER_API_KEY_PREFIX = 'sk-placeholder'
+
+# OpenAI client — use a placeholder key when none is configured so the server
+# starts cleanly; actual API calls are skipped in placeholder mode.
+_openai_api_key = os.environ.get('OPENAI_API_KEY') or f'{_PLACEHOLDER_API_KEY_PREFIX}-unconfigured'
+openai_client = AsyncOpenAI(api_key=_openai_api_key)
+
+# True when no real API key is configured (used in chat and task pipeline)
+_use_placeholder_ai = not _openai_api_key or _openai_api_key.startswith(_PLACEHOLDER_API_KEY_PREFIX)
 
 # Max characters for the auto-generated plan title in placeholder mode
 _PLACEHOLDER_TITLE_MAX_LENGTH = 40
@@ -238,17 +243,27 @@ async def chat(request: ChatRequest):
             # Send conversation_id so the client knows which conversation this belongs to
             yield f"data: {json.dumps({'type': 'start', 'conversation_id': conversation_id, 'message_id': assistant_id})}\n\n"
 
-            stream = await openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages_for_llm,
-                stream=True,
-            )
+            if _use_placeholder_ai:
+                # No valid API key — return a demo placeholder response
+                placeholder = (
+                    "⚠️ **Mode démonstration** — aucune clé API OpenAI configurée.\n\n"
+                    "Pour activer le chat IA, ajoutez `OPENAI_API_KEY=sk-...` dans `backend/.env`.\n\n"
+                    f"Votre message : *{request.message}*"
+                )
+                full_content.append(placeholder)
+                yield f"data: {json.dumps({'type': 'chunk', 'content': placeholder})}\n\n"
+            else:
+                stream = await openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages_for_llm,
+                    stream=True,
+                )
 
-            async for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    full_content.append(delta)
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': delta})}\n\n"
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        full_content.append(delta)
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': delta})}\n\n"
 
             # Persist assistant message
             full_text = "".join(full_content)
@@ -340,8 +355,7 @@ async def _run_task(task_id: str, mode: str, prompt: str):
     user_message = f"Type: {mode_label}\nDescription: {prompt}"
 
     try:
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if api_key and not api_key.startswith(_PLACEHOLDER_API_KEY_PREFIX):
+        if not _use_placeholder_ai:
             response = await openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -352,8 +366,11 @@ async def _run_task(task_id: str, mode: str, prompt: str):
             output = response.choices[0].message.content
         else:
             # Placeholder output when no valid API key is configured
+            title = prompt[:_PLACEHOLDER_TITLE_MAX_LENGTH]
+            if len(prompt) > _PLACEHOLDER_TITLE_MAX_LENGTH:
+                title += "…"
             output = json.dumps({
-                "title": prompt[:_PLACEHOLDER_TITLE_MAX_LENGTH],
+                "title": title,
                 "description": f"A {mode_label} application: {prompt}",
                 "tech_stack": ["React", "FastAPI", "MongoDB"],
                 "features": ["User authentication", "Dashboard", "REST API"],

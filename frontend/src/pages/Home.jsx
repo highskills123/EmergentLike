@@ -339,8 +339,10 @@ export default function Home() {
         {/* Keyboard hint */}
         <p className="mt-3 text-xs text-white/25">
           <kbd className="px-1.5 py-0.5 rounded border border-white/[0.12] font-mono bg-white/[0.04]">
-            {typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'}
-            {' '}Enter
+            {typeof navigator !== 'undefined' &&
+            (navigator.userAgentData?.platform ?? navigator.userAgent).toLowerCase().includes('mac')
+              ? '⌘'
+              : 'Ctrl'}{' '}Enter
           </kbd>
           {' '}pour lancer · cliquez{' '}
           <span className="inline-flex items-center">
