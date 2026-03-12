@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import axios from 'axios';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
@@ -107,7 +108,7 @@ export default function Chat() {
   const loadConversations = useCallback(async () => {
     try {
       const { data } = await axios.get(`${API}/conversations`);
-      setConversations(data);
+      if (Array.isArray(data)) setConversations(data);
     } catch (err) {
       console.error('Failed to load conversations:', err);
     }
@@ -118,7 +119,7 @@ export default function Chat() {
       const { data } = await axios.get(
         `${API}/conversations/${conversationId}/messages`
       );
-      setMessages(data);
+      if (Array.isArray(data)) setMessages(data);
     } catch (err) {
       console.error('Failed to load messages:', err);
     }
@@ -277,11 +278,20 @@ export default function Chat() {
       <aside className="w-64 bg-slate-800 text-white flex flex-col flex-shrink-0">
         {/* Logo */}
         <div className="px-4 py-5 border-b border-slate-700">
-          <div className="flex items-center space-x-2 mb-4">
-            <div className="w-7 h-7 bg-indigo-500 rounded-lg flex items-center justify-center text-xs font-bold">
-              E
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-2">
+              <div className="w-7 h-7 bg-indigo-500 rounded-lg flex items-center justify-center text-xs font-bold">
+                E
+              </div>
+              <span className="font-semibold text-sm tracking-wide">EmergentLike AI</span>
             </div>
-            <span className="font-semibold text-sm tracking-wide">EmergentLike AI</span>
+            <Link
+              to="/"
+              className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded hover:bg-slate-700 transition-colors"
+              title="Retour à l'accueil"
+            >
+              ← Accueil
+            </Link>
           </div>
           <button
             onClick={handleNewChat}

@@ -29,12 +29,19 @@ openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 # Sentinel value used to detect a missing/placeholder OpenAI API key
 _PLACEHOLDER_API_KEY_PREFIX = 'sk-placeholder'
 
+# Max characters for the auto-generated plan title in placeholder mode
+_PLACEHOLDER_TITLE_MAX_LENGTH = 40
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# Module-level set to keep strong references to background tasks
+_background_tasks: set = set()
 
 
 @asynccontextmanager
@@ -294,8 +301,10 @@ async def create_task(body: TaskCreate):
     doc['updated_at'] = datetime_to_iso(doc['updated_at'])
     await db.tasks.insert_one(doc)
 
-    # Fire-and-forget generation pipeline
-    asyncio.create_task(_run_task(task.id, body.mode, body.prompt))
+    # Fire-and-forget generation pipeline; keep a strong reference to avoid GC
+    bg_task = asyncio.create_task(_run_task(task.id, body.mode, body.prompt))
+    _background_tasks.add(bg_task)
+    bg_task.add_done_callback(_background_tasks.discard)
     return task
 
 
@@ -344,7 +353,7 @@ async def _run_task(task_id: str, mode: str, prompt: str):
         else:
             # Placeholder output when no valid API key is configured
             output = json.dumps({
-                "title": prompt[:40],
+                "title": prompt[:_PLACEHOLDER_TITLE_MAX_LENGTH],
                 "description": f"A {mode_label} application: {prompt}",
                 "tech_stack": ["React", "FastAPI", "MongoDB"],
                 "features": ["User authentication", "Dashboard", "REST API"],
